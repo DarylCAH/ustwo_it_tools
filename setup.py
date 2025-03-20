@@ -12,18 +12,21 @@ OPTIONS = {
         'PyQt5.QtCore',
         'PyQt5.QtGui',
         'PyQt5.QtWidgets',
+        'PyQt5.sip',
         'config',
         'json',
         'os',
+        'sys',
         'subprocess',
-        'sys'
+        'logging'
     ],
     'includes': [
         'config',
         'json',
         'os',
         'subprocess',
-        'sys'
+        'sys',
+        'logging'
     ],
     'excludes': ['tkinter'],
     'iconfile': 'assets/brandingimage.icns',
@@ -37,8 +40,21 @@ OPTIONS = {
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.13.0',
         'NSAppleEventsUsageDescription': 'This app needs to run GAM commands',
-        'NSAppleScriptEnabled': True
-    }
+        'NSAppleScriptEnabled': True,
+        'LSEnvironment': {
+            'PYTHONPATH': '@executable_path/../Resources/lib/python3.11/site-packages/',
+            'DYLD_LIBRARY_PATH': '@executable_path/../Frameworks/'
+        },
+        'PyRuntimeLocations': [
+            '@executable_path/../Frameworks/Python.framework/Versions/3.11/Python'
+        ]
+    },
+    'frameworks': ['Python.framework'],
+    'resources': ['assets', 'config'],
+    'site_packages': True,
+    'strip': False,
+    'debug_modulegraph': True,
+    'optimize': 0
 }
 
 setup(
