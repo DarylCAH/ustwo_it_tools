@@ -41,6 +41,8 @@ A unified Python application for managing Google Workspace resources at ustwo, c
 
 ## Installation
 
+### Option 1: Run as Python Script
+
 1. Clone the repository:
 ```bash
 git clone ssh://git@10.0.4.2:2221/daryl/ustwo-it-tools.git
@@ -49,7 +51,7 @@ cd ustwo-it-tools
 
 2. Install required Python packages:
 ```bash
-pip install PyQt5
+pip install -r requirements.txt
 ```
 
 3. Ensure GAM is installed and configured:
@@ -59,6 +61,24 @@ pip install PyQt5
 export GAM_PATH=/path/to/your/gam
 ```
 
+### Option 2: Build macOS App
+
+1. Clone the repository and navigate to it:
+```bash
+git clone ssh://git@10.0.4.2:2221/daryl/ustwo-it-tools.git
+cd ustwo-it-tools
+```
+
+2. Run the build script:
+```bash
+./build_app.sh
+```
+
+3. The app will be created in the `dist/` directory. You can then:
+   - Double-click to run it
+   - Drag it to your Applications folder
+   - Create an alias on your desktop
+
 ## Directory Structure
 
 ```
@@ -67,19 +87,26 @@ ustwo_it_tools/
 │   └── brandingimage.icns
 ├── config/             # Configuration files
 │   └── .gitkeep
-├── ustwo_tools.py      # Main unified application
-├── config.py           # Shared configuration module
-├── Create_Group.py     # Google Groups tool
-├── Shared_Drive.py     # Shared Drive tool
-└── Offboarding.py      # Offboarding tool
+├── build_app.sh        # macOS app build script
+├── requirements.txt    # Python dependencies
+├── setup.py           # py2app configuration
+├── ustwo_tools.py     # Main unified application
+├── config.py          # Shared configuration module
+├── Create_Group.py    # Google Groups tool
+├── Shared_Drive.py    # Shared Drive tool
+└── Offboarding.py     # Offboarding tool
 ```
 
 ## Usage
 
-Run the unified application:
+### Running as Python Script
 ```bash
 python ustwo_tools.py
 ```
+
+### Running as macOS App
+1. Double-click the app in the `dist/` directory
+2. Or drag it to your Applications folder and launch it from there
 
 The application provides a tabbed interface to access all three tools. Each tool maintains its own configuration and settings.
 
@@ -102,6 +129,31 @@ The application is structured to allow each tool to run independently or as part
 python Create_Group.py
 python Shared_Drive.py
 python Offboarding.py
+```
+
+## Building the macOS App
+
+To build the macOS app:
+
+1. Make sure you have all requirements installed:
+```bash
+pip install -r requirements.txt
+```
+
+2. Run the build script:
+```bash
+./build_app.sh
+```
+
+3. The app will be created in the `dist/` directory.
+
+To rebuild the app after changes:
+```bash
+# Clean previous builds
+rm -rf build dist
+
+# Rebuild
+./build_app.sh
 ```
 
 ## Contributing
