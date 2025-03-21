@@ -1,169 +1,110 @@
 # ustwo IT Tools
 
-A unified Python application for managing Google Workspace resources at ustwo, combining three powerful tools into a single interface:
+A collection of Python tools for IT administration at ustwo, including:
+- Google Group management
+- Shared Drive administration
+- Offboarding automation
 
-1. Google Groups Management
-2. Shared Drive Creation and Management
-3. User Offboarding
+## Setup
 
-## Features
+1. Make sure you have Python 3.x installed
+2. Install the required dependencies:
+   ```
+   pip3 install -r requirements.txt
+   ```
 
-### Google Groups Tool
-- Create new Google Groups with custom permissions
-- Add members with different roles (owners, managers, members)
-- Configure access settings via a visual permission matrix
-- Persistent email storage for convenience
-- Custom branded dialogs for all user interactions
+## Running the Application
 
-### Shared Drive Tool
-- Create new Google Shared Drives
-- Optional 2-folder template copy (Internal/External/GDPR)
-- Bulk membership management
-- Support for external and GDPR-compliant drives
-- Custom branded dialogs for all user interactions
+You can run the application in three ways:
 
-### Offboarding Tool
-- Process multiple users simultaneously
-- Transfer owned groups
-- Remove users from all groups
-- Set out of office messages
-- Reset passwords
-- Sign out from all devices
-- Hide from directory
-- Move to Leavers OU
+### Option 1: Using the run script (source code)
 
-## Requirements
-
-- Python 3.x
-- PyQt5
-- GAM (Google Apps Manager) installed at `~/bin/gam7/gam`
-- macOS (for branding icon support)
-
-## Installation
-
-### Option 1: Run as Python Script
-
-1. Clone the repository:
-```bash
-git clone ssh://git@10.0.4.2:2221/daryl/ustwo-it-tools.git
-cd ustwo-it-tools
+```
+./run.sh
 ```
 
-2. Install required Python packages:
-```bash
-pip install -r requirements.txt
+### Option 2: Running the Python script directly
+
+```
+python3 ustwo_tools.py
 ```
 
-3. Ensure GAM is installed and configured:
-```bash
-# GAM should be installed at ~/bin/gam7/gam
-# If installed elsewhere, set the GAM_PATH environment variable
-export GAM_PATH=/path/to/your/gam
+### Option 3: Build and run as a macOS application
+
 ```
-
-### Option 2: Build macOS App
-
-1. Clone the repository and navigate to it:
-```bash
-git clone ssh://git@10.0.4.2:2221/daryl/ustwo-it-tools.git
-cd ustwo-it-tools
-```
-
-2. Run the build script:
-```bash
 ./build_app.sh
 ```
 
-3. The app will be created in the `dist/` directory. You can then:
-   - Double-click to run it
-   - Drag it to your Applications folder
-   - Create an alias on your desktop
+Then open the generated application in the `dist` folder or copy it to your Applications folder.
 
-## Directory Structure
+## Project Structure
 
-```
-ustwo_it_tools/
-├── assets/              # Shared assets
-│   └── brandingimage.icns
-├── config/             # Configuration files
-│   └── .gitkeep
-├── build_app.sh        # macOS app build script
-├── requirements.txt    # Python dependencies
-├── setup.py           # py2app configuration
-├── ustwo_tools.py     # Main unified application
-├── config.py          # Shared configuration module
-├── Create_Group.py    # Google Groups tool
-├── Shared_Drive.py    # Shared Drive tool
-└── Offboarding.py     # Offboarding tool
-```
+### Core Application Files
+- `ustwo_tools.py` - Main application that provides a tabbed interface
+- `Create_Group.py` - Google Groups management tool
+- `Shared_Drive.py` - Shared Drive administration tool  
+- `Offboarding.py` - User offboarding automation
+- `config.py` - Configuration settings for the application
+- `assets/` - Contains application assets like icons
 
-## Usage
-
-### Running as Python Script
-```bash
-python ustwo_tools.py
-```
-
-### Running as macOS App
-1. Double-click the app in the `dist/` directory
-2. Or drag it to your Applications folder and launch it from there
-
-The application provides a tabbed interface to access all three tools. Each tool maintains its own configuration and settings.
-
-## Configuration
-
-The application uses a shared configuration module (`config.py`) that manages:
-- Path to GAM binary
-- Asset locations
-- Configuration file storage
-- Settings persistence
-
-Configuration files are stored in the `config/` directory and are automatically created when needed.
-
-## Development
-
-The application is structured to allow each tool to run independently or as part of the unified interface. Each tool can be run separately:
-
-```bash
-# Run individual tools
-python Create_Group.py
-python Shared_Drive.py
-python Offboarding.py
-```
+### Build System
+- `build_app.sh` - Simple script to build the macOS application
+- `build_scripts/` - Directory containing all build-related scripts
+  - `app_launcher.py` - Entry point for the macOS application
+  - `setup_py2app.py` - Configuration for py2app
+  - `build_macos_app.sh` - Main build script with detailed options
 
 ## Building the macOS App
 
-To build the macOS app:
+The build process creates a standalone macOS application that can be distributed to users.
 
-1. Make sure you have all requirements installed:
-```bash
-pip install -r requirements.txt
-```
+1. Make sure all dependencies are installed:
+   ```
+   pip3 install -r requirements.txt
+   ```
 
 2. Run the build script:
-```bash
-./build_app.sh
-```
+   ```
+   ./build_app.sh
+   ```
 
-3. The app will be created in the `dist/` directory.
+3. The app will be created in the `dist` directory.
 
-To rebuild the app after changes:
-```bash
-# Clean previous builds
-rm -rf build dist
+## Requirements
 
-# Rebuild
-./build_app.sh
-```
+See `requirements.txt` for a list of required Python packages.
 
-## Contributing
+## Notes
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+- The application uses PyQt5 for its interface.
+- The macOS app is built using py2app.
+- The app package includes all dependencies and resources needed to run.
 
-## License
+## Troubleshooting
 
-This project is proprietary and confidential. All rights reserved. 
+### ModuleNotFoundError: No module named 'json'
+
+If you encounter the error `ModuleNotFoundError: No module named 'json'` when running the bundled application, this is because the standard library module `json` is not being included in the py2app bundle.
+
+To fix this issue:
+
+1. Ensure that the `setup_py2app.py` file includes 'json' in both the 'packages' and 'includes' lists:
+   ```python
+   OPTIONS = {
+       'argv_emulation': True,
+       'iconfile': 'assets/brandingimage.icns',
+       'plist': plist,
+       'packages': ['PyQt5', 'json'],
+       'includes': ['config', 'Create_Group', 'Shared_Drive', 'Offboarding', 'datetime', 'pathlib', 'logging', 'json'],
+       # ... other options ...
+   }
+   ```
+
+2. Rebuild the application using the build script:
+   ```
+   ./build_app.sh
+   ```
+
+### Other Import Errors
+
+If you encounter other import errors with standard library modules, follow the same process by adding them to both the 'packages' and 'includes' lists in `setup_py2app.py`. 

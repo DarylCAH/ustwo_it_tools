@@ -389,18 +389,6 @@ class MainWindow(QMainWindow):
         self.log(f"\nStarting group creation workflow for '{self.group_name}'...")
         self.create_group()
 
-    def create_group(self):
-        """Create a Google Group with the specified settings"""
-        self.btn_start.setEnabled(False)
-        
-        # Prepare command to create group
-        create_cmd = f"create group {self.group_email} name \"{self.group_name}\""
-        if self.description:
-            create_cmd += f" description \"{self.description}\""
-            
-        self.log(f"\n[Info] Creating group {self.group_email}...")
-        self.run_gam_command(create_cmd)
-        
     def show_warning(self, title, message):
         """Show a warning dialog"""
         dlg = QDialog(self)
@@ -438,24 +426,9 @@ class MainWindow(QMainWindow):
         full_command = f"{config.GAM_PATH} {command}"
         worker = WorkerThread(full_command)
         worker.output.connect(self.log_output)
-        worker.finished.connect(lambda: self.cleanup_thread(worker))
+        worker.finished.connect(self.command_finished)
         worker.start()
-        self.workers.append(worker)
-        
-    def log_output(self, text):
-        """Log output from the worker thread"""
-        self.log(text)
-        
-    def cleanup_thread(self, worker):
-        """Remove the thread from our tracking list once it's done"""
-        if worker in self.workers:
-            self.workers.remove(worker)
-        self.command_finished()
-        
-    def command_finished(self):
-        """Enable buttons if all threads are done"""
-        if not self.workers:
-            self.btn_start.setEnabled(True)
+        self.current_worker = worker
 
 def standalone():
     """Run this tool as a standalone application"""
