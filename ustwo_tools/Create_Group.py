@@ -17,9 +17,9 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QLineEdit, QPushButton, QTextEdit, QCheckBox, QDialog, QDialogButtonBox,
     QPlainTextEdit, QComboBox, QGridLayout, QRadioButton, QGroupBox, QSlider,
-    QScrollArea
+    QScrollArea, QMessageBox
 )
-import config
+from . import config
 
 # Path to GAM binary
 GAM_PATH = os.path.expanduser("~/bin/gam7/gam")
@@ -206,20 +206,17 @@ class JoinSettings(QGroupBox):
 # MAIN WINDOW
 ##############################################################################
 
-class MainWindow(QMainWindow):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Google Group Creation Tool")
-        self.settings = config.load_config(config.GROUP_CONFIG)
+class CreateGroupTab(QWidget):
+    def __init__(self):
+        super().__init__()
         self.init_ui()
-        
+
     def init_ui(self):
         self.workers = []
-        central = QWidget()
-        self.setCentralWidget(central)
+        self.settings = config.load_config(config.GROUP_CONFIG)
         
         # Main horizontal layout for two columns
-        main_hbox = QHBoxLayout(central)
+        main_hbox = QHBoxLayout(self)
         
         # Left column (inputs) - wrapped in scroll area
         scroll_area = QScrollArea()
@@ -461,7 +458,7 @@ def standalone():
     """Run this tool as a standalone application"""
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("/Library/JAMF/Icon/brandingimage.icns"))
-    w = MainWindow()
+    w = CreateGroupTab()
     w.show()
     sys.exit(app.exec_())
 

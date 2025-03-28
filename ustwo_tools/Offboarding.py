@@ -10,10 +10,13 @@ import subprocess
 import json
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                           QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
-                          QPushButton, QGroupBox, QCheckBox, QScrollArea)
+                          QPushButton, QGroupBox, QCheckBox, QScrollArea,
+                          QTextEdit, QMessageBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QIcon
-import config
+import logging
+
+from . import config
 
 class WorkerThread(QThread):
     output = pyqtSignal(str)
@@ -42,17 +45,15 @@ class WorkerThread(QThread):
             self.output.emit(f"Error: {str(e)}")
             self.finished.emit()
 
-class MainWindow(QMainWindow):
+class OffboardingTab(QWidget):
     def __init__(self):
         super().__init__()
         self.worker_threads = []  # List to track all worker threads
         self.init_ui()
 
     def init_ui(self):
-        # Create main widget and layout
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QHBoxLayout(main_widget)
+        # Create main layout
+        layout = QHBoxLayout(self)
         
         # Create left column for inputs
         left_column = QWidget()
@@ -221,6 +222,6 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     if os.path.exists(config.ICON_PATH):
         app.setWindowIcon(QIcon(config.ICON_PATH))
-    window = MainWindow()
+    window = OffboardingTab()
     window.show()
     sys.exit(app.exec_()) 

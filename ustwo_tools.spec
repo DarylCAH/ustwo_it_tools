@@ -3,27 +3,37 @@
 block_cipher = None
 
 a = Analysis(
-    ['ustwo_tools.py'],
+    ['build_scripts/app_launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('assets', 'assets'),
-        ('config', 'config')
-    ],
+    datas=[('assets', 'assets'), ('ustwo_tools', 'ustwo_tools')],
     hiddenimports=[
-        'PyQt5',
         'PyQt5.QtCore',
         'PyQt5.QtGui',
         'PyQt5.QtWidgets',
-        'Create_Group',
-        'Shared_Drive',
-        'Offboarding',
-        'config',
+        'ustwo_tools',
+        'json',
+        'os',
+        'sys',
+        'logging',
+        'datetime',
+        'pathlib',
+        'base64',
+        'io',
+        'time',
+        'uuid',
+        'urllib',
+        'urllib.parse',
+        'urllib.request',
+        'urllib.error',
+        'http',
+        'http.client',
+        'ssl'
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['pkg_resources.py2_warn', 'pkg_resources.tests'],
+    excludes=['tkinter', 'matplotlib', 'numpy'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -37,18 +47,18 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ustwo_tools',
+    name='ustwo IT Tools',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/brandingimage.icns',
+    icon='assets/brandingimage.icns'
 )
 
 coll = COLLECT(
@@ -57,9 +67,9 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
-    name='ustwo_tools',
+    name='ustwo IT Tools',
 )
 
 app = BUNDLE(
@@ -75,10 +85,11 @@ app = BUNDLE(
         'NSAppleScriptEnabled': False,
         'CFBundleDisplayName': 'ustwo IT Tools',
         'CFBundleName': 'ustwo IT Tools',
-        'CFBundleExecutable': 'ustwo_tools',
+        'CFBundleExecutable': 'ustwo IT Tools',
         'LSEnvironment': {
             'PYTHONDONTWRITEBYTECODE': '1',
             'PYTHONNOUSERSITE': '1',
+            'QT_MAC_WANTS_LAYER': '1',
         },
         'LSMinimumSystemVersion': '10.13.0',
     },

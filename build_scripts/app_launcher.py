@@ -37,7 +37,6 @@ def main():
             resources_path = os.path.join(app_path, 'Resources')
             if resources_path not in sys.path:
                 sys.path.insert(0, resources_path)
-            os.chdir(resources_path)  # Change working directory to resources
             logging.info(f"Running as bundled app, added {resources_path} to path")
         else:
             # Running as script
@@ -48,12 +47,11 @@ def main():
         
         # Import main app
         logging.info("Importing main application...")
-        sys.path.append(os.getcwd())  # Add current directory to path
-        import ustwo_tools
+        from ustwo_tools.ustwo_tools import main as app_main
         
         # Run the application
         logging.info("Starting main application")
-        ustwo_tools.main()
+        app_main()
         
     except Exception as e:
         logging.error(f"Error in launcher: {str(e)}", exc_info=True)
