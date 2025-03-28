@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import json
+import time
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtWidgets import (
@@ -34,28 +35,67 @@ CONFIG_FILE = os.path.expanduser("~/.group_tool.json")
 class WorkerThread(QThread):
     output = pyqtSignal(str)
     finished = pyqtSignal()
+    done_signal = pyqtSignal(int, list)  # (returncode, all_lines)
 
     def __init__(self, command):
         super().__init__()
         self.command = command
+        self.captured_lines = []
 
     def run(self):
         try:
+            # Convert string command to list for Popen
+            if isinstance(self.command, str):
+                cmd_list = [config.GAM_PATH] + self.command.split()
+            else:
+                # Already a list, make sure first item is GAM path
+                cmd_list = self.command
+                if cmd_list[0] != config.GAM_PATH:
+                    cmd_list.insert(0, config.GAM_PATH)
+            
+            # Log if GAM not found
+            if not os.path.isfile(cmd_list[0]):
+                error_msg = f"[ERROR] Could not find GAM at {cmd_list[0]}"
+                self.output.emit(error_msg)
+                self.captured_lines.append(error_msg)
+                self.done_signal.emit(1, self.captured_lines)
+                self.finished.emit()
+                return
+                
+            # Execute command
             process = subprocess.Popen(
-                self.command,
+                cmd_list,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                shell=True
+                stderr=subprocess.PIPE,
+                text=True
             )
             
-            for line in process.stdout:
-                self.output.emit(line.strip())
+            # Capture stdout
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                stripped = line.rstrip('\n')
+                self.output.emit(stripped)
+                self.captured_lines.append(stripped)
             
-            process.wait()
+            # Capture stderr
+            err_output = process.stderr.read()
+            if err_output:
+                for e_line in err_output.splitlines():
+                    combined = f"\n{e_line}"
+                    self.output.emit(combined)
+                    self.captured_lines.append(combined)
+            
+            # Get return code and emit signals
+            rc = process.wait()
+            self.done_signal.emit(rc, self.captured_lines)
             self.finished.emit()
         except Exception as e:
-            self.output.emit(f"Error: {str(e)}")
+            ex_line = f"[Exception] {str(e)}"
+            self.output.emit(ex_line)
+            self.captured_lines.append(ex_line)
+            self.done_signal.emit(1, self.captured_lines)
             self.finished.emit()
 
 ##############################################################################
@@ -203,6 +243,39 @@ class JoinSettings(QGroupBox):
         return self.external_toggle.isChecked()
 
 ##############################################################################
+# DIALOGS
+##############################################################################
+
+class MultiLineAddressesDialog(QDialog):
+    """Dialog for entering multiple email addresses"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Instructions
+        instructions = QLabel("Enter email addresses (one per line or comma-separated):")
+        layout.addWidget(instructions)
+        
+        # Text input area
+        self.text_edit = QPlainTextEdit()
+        self.text_edit.setPlaceholderText("user1@example.com\nuser2@example.com")
+        self.text_edit.setMinimumWidth(400)
+        self.text_edit.setMinimumHeight(200)
+        layout.addWidget(self.text_edit)
+        
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
+            Qt.Horizontal, self
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+##############################################################################
 # MAIN WINDOW
 ##############################################################################
 
@@ -297,18 +370,43 @@ class CreateGroupTab(QWidget):
         left_layout.addWidget(member_group)
 
         # Permission matrix
-        self.permission_matrix = PermissionMatrix()
-        left_layout.addWidget(self.permission_matrix)
+        self.perm_matrix = PermissionMatrix()
+        left_layout.addWidget(self.perm_matrix)
 
         # Join settings
         self.join_settings = JoinSettings()
         left_layout.addWidget(self.join_settings)
 
-        # Buttons
-        btn_hbox = QHBoxLayout()
-        left_layout.addLayout(btn_hbox)
+        # Add scroll area to main layout
+        scroll_area.setWidget(left_column)
+        main_hbox.addWidget(scroll_area)
 
-        self.btn_start = QPushButton("Create Group")
+        # Right column (log area)
+        right_column = QWidget()
+        right_layout = QVBoxLayout(right_column)
+
+        # Log area title
+        log_title = QLabel("Output Log")
+        log_title.setAlignment(Qt.AlignCenter)
+        right_layout.addWidget(log_title)
+
+        # Log area
+        self.log_area = QTextEdit()
+        self.log_area.setReadOnly(True)
+        right_layout.addWidget(self.log_area)
+
+        # Add right column to main layout
+        main_hbox.addWidget(right_column)
+
+        # Set column stretch factors (1:1 ratio)
+        main_hbox.setStretch(0, 1)  # Left column
+        main_hbox.setStretch(1, 1)  # Right column
+
+        # Buttons at the bottom
+        btn_hbox = QHBoxLayout()
+        right_layout.addLayout(btn_hbox)
+
+        self.btn_start = QPushButton("Start Workflow")
         self.btn_start.clicked.connect(self.handle_workflow)
         btn_hbox.addWidget(self.btn_start)
 
@@ -316,28 +414,7 @@ class CreateGroupTab(QWidget):
         self.btn_quit.clicked.connect(self.close)
         btn_hbox.addWidget(self.btn_quit)
 
-        # Add left column to scroll area
-        scroll_area.setWidget(left_column)
-        main_hbox.addWidget(scroll_area, stretch=1)
-
-        # Right column (output)
-        right_column = QWidget()
-        right_layout = QVBoxLayout(right_column)
-        
-        # Log area with title
-        log_label = QLabel("Output Log")
-        log_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        right_layout.addWidget(log_label)
-        
-        self.log_area = QTextEdit()
-        self.log_area.setReadOnly(True)
-        right_layout.addWidget(self.log_area)
-
-        # Add right column to main layout
-        main_hbox.addWidget(right_column, stretch=1)
-
-        # Set window size
-        self.resize(1200, 800)
+        # Load saved email
         self.load_config()
 
     def load_config(self):
@@ -366,38 +443,248 @@ class CreateGroupTab(QWidget):
         self.log_area.append(text)
 
     def handle_workflow(self):
-        """Main workflow for creating a group and adding members"""
-        self.log_area.clear()
-        
-        # Validate inputs
+        """Handle the workflow start button click"""
+        # Get user inputs
         self.user_email = self.input_email.text().strip()
         self.group_name = self.input_group_name.text().strip()
         self.group_email = self.input_group_email.text().strip()
-        self.description = self.input_description.toPlainText().strip()  # Changed to toPlainText()
-
-        if not all([self.user_email, self.group_name, self.group_email]):
-            self.show_warning("Missing Info", "Please provide your email, group name, and group email address.")
+        self.description = self.input_description.toPlainText().strip()
+        
+        # Get member lists
+        self.owners = self.parse_addresses(self.input_owners.toPlainText())
+        self.managers = self.parse_addresses(self.input_managers.toPlainText())
+        self.members = self.parse_addresses(self.input_members.toPlainText())
+        
+        # Clean up previous states
+        self.log_area.clear()
+        
+        # Validate inputs
+        if not self.user_email:
+            self.show_warning("Missing Information", "Please enter your email address.")
             return
-
-        # Save the email for future use
+            
+        if not all([self.group_name, self.group_email]):
+            self.show_warning("Missing Information", "Please enter both group name and email address.")
+            return
+            
+        # Save the settings
+        self.settings["email"] = self.user_email
         self.save_config()
-
-        # Start the group creation process
-        self.log(f"\nStarting group creation workflow for '{self.group_name}'...")
+        
+        # Start the workflow
+        self.log(f"\nStarting workflow for group '{self.group_name}' with email {self.group_email}")
         self.create_group()
 
     def create_group(self):
-        """Create a Google Group with the specified settings"""
+        """Create a Google Group"""
         self.btn_start.setEnabled(False)
+        self.log("\nCreating group...")
         
-        # Prepare command to create group
-        create_cmd = f"create group {self.group_email} name \"{self.group_name}\""
+        # Build create command
+        cmd_parts = [f"create group {self.group_email}"]
+        cmd_parts.append(f"name \"{self.group_name}\"")
         if self.description:
-            create_cmd += f" description \"{self.description}\""
-            
-        self.log(f"\n[Info] Creating group {self.group_email}...")
-        self.run_gam_command(create_cmd)
+            cmd_parts.append(f"description \"{self.description}\"")
+        cmd_parts.append("who_can_join invited_can_join")
         
+        cmd = " ".join(cmd_parts)
+        
+        def creation_done(rc, lines):
+            if rc != 0:
+                self.log("\n[Error] Failed to create the group.")
+                self.btn_start.setEnabled(True)
+                return
+            
+            self.log("\nGroup created successfully.")
+            self.verify_group_exists()
+        
+        worker = WorkerThread(cmd)
+        worker.output.connect(self.log_output)
+        worker.done_signal.connect(creation_done)
+        worker.finished.connect(lambda: self.cleanup_thread(worker))
+        worker.start()
+        self.workers.append(worker)
+
+    def verify_group_exists(self, attempts=0):
+        """Verify the group was created successfully"""
+        self.log("\nVerifying group creation...")
+        
+        cmd = f"info group {self.group_email}"
+        
+        def verify_done(rc, lines):
+            if rc != 0:
+                if attempts < 3:
+                    self.log("\nGroup not found yet, retrying...")
+                    time.sleep(2)
+                    self.verify_group_exists(attempts + 1)
+                else:
+                    self.log("\n[Error] Could not verify group creation.")
+                    self.btn_start.setEnabled(True)
+                return
+            
+            self.log("\nGroup verified. Configuring permissions...")
+            self.configure_permissions()  # Configure permissions first
+        
+        worker = WorkerThread(cmd)
+        worker.output.connect(self.log_output)
+        worker.done_signal.connect(verify_done)
+        worker.finished.connect(lambda: self.cleanup_thread(worker))
+        worker.start()
+        self.workers.append(worker)
+
+    def configure_permissions(self):
+        """Configure group permissions based on matrix settings"""
+        self.log("\nConfiguring group permissions...")
+        
+        # Build settings dictionary
+        settings = {
+            "whoCanContactOwner": "ALL_MANAGERS_CAN_CONTACT",
+            "whoCanViewGroup": "ALL_MEMBERS_CAN_VIEW",
+            "whoCanViewMembership": "ALL_MEMBERS_CAN_VIEW",
+            "whoCanJoin": "INVITED_CAN_JOIN",
+            "whoCanPostMessage": "ALL_MEMBERS_CAN_POST",
+            "allowExternalMembers": "true" if self.join_settings.value() else "false"
+        }
+        
+        # Update based on permission matrix
+        contact_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_CONTACT", "ALL_MEMBERS_CAN_CONTACT", "ANYONE_CAN_CONTACT"]
+        view_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_VIEW", "ALL_MEMBERS_CAN_VIEW", "ALL_IN_DOMAIN_CAN_VIEW", "ANYONE_CAN_VIEW"]
+        post_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_POST", "ALL_MEMBERS_CAN_POST", "ALL_IN_DOMAIN_CAN_POST", "ANYONE_CAN_POST"]
+        members_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_VIEW", "ALL_MEMBERS_CAN_VIEW", "ALL_IN_DOMAIN_CAN_VIEW"]
+        
+        # Get highest checked column for each row
+        for row in range(5):
+            highest = -1
+            for col in range(5):
+                if (row, col) in self.perm_matrix.checkboxes and self.perm_matrix.checkboxes[(row, col)].isChecked():
+                    highest = col
+            
+            # Update settings based on row
+            if row == 0:  # Contact owners
+                if highest >= 0:
+                    settings["whoCanContactOwner"] = contact_map[min(highest, len(contact_map)-1)]
+            elif row == 1:  # View conversations
+                if highest >= 0:
+                    settings["whoCanViewGroup"] = view_map[min(highest, len(view_map)-1)]
+            elif row == 2:  # Post
+                if highest >= 0:
+                    settings["whoCanPostMessage"] = post_map[min(highest, len(post_map)-1)]
+            elif row == 3:  # View members
+                if highest >= 0:
+                    settings["whoCanViewMembership"] = members_map[min(highest, len(members_map)-1)]
+        
+        # Update join settings based on radio buttons
+        if self.join_settings.radio_approval.isChecked():
+            settings["whoCanJoin"] = "CAN_REQUEST_TO_JOIN"
+        elif self.join_settings.radio_anyone.isChecked():
+            settings["whoCanJoin"] = "ALL_IN_DOMAIN_CAN_JOIN"
+        else:  # radio_invited is checked
+            settings["whoCanJoin"] = "INVITED_CAN_JOIN"
+        
+        # Build the command - fixing the syntax
+        cmd = f"update group {self.group_email} "
+        for key, value in settings.items():
+            cmd += f"setting {key} {value} "  # Changed 'settings' to 'setting'
+        
+        def settings_done(rc, lines):
+            if rc != 0:
+                self.log("\n[Error] Failed to update group settings.")
+                self.btn_start.setEnabled(True)
+                return
+            
+            self.log("\nGroup settings updated successfully.")
+            if any([self.owners, self.managers, self.members]):
+                self.process_members()  # Process members after permissions are set
+            else:
+                self.verify_settings()
+        
+        worker = WorkerThread(cmd)
+        worker.output.connect(self.log_output)
+        worker.done_signal.connect(settings_done)
+        worker.finished.connect(lambda: self.cleanup_thread(worker))
+        worker.start()
+        self.workers.append(worker)
+
+    def process_members(self):
+        """Add members to the group with their respective roles"""
+        self.log("\nAdding members to the group...")
+        
+        # Track progress
+        self.total_members = len(self.owners) + len(self.managers) + len(self.members)
+        self.processed_members = 0
+        
+        def member_added(rc, lines):
+            self.processed_members += 1
+            if rc != 0:
+                self.log("\n[Warning] Failed to add a member.")
+            
+            if self.processed_members >= self.total_members:
+                self.log("\nAll members processed.")
+                self.verify_settings()
+        
+        # Add owners
+        for owner in self.owners:
+            cmd = f"update group {self.group_email} add owner {owner}"
+            worker = WorkerThread(cmd)
+            worker.output.connect(self.log_output)
+            worker.done_signal.connect(member_added)
+            worker.finished.connect(lambda: self.cleanup_thread(worker))
+            worker.start()
+            self.workers.append(worker)
+        
+        # Add managers
+        for manager in self.managers:
+            cmd = f"update group {self.group_email} add manager {manager}"
+            worker = WorkerThread(cmd)
+            worker.output.connect(self.log_output)
+            worker.done_signal.connect(member_added)
+            worker.finished.connect(lambda: self.cleanup_thread(worker))
+            worker.start()
+            self.workers.append(worker)
+        
+        # Add members
+        for member in self.members:
+            cmd = f"update group {self.group_email} add member {member}"
+            worker = WorkerThread(cmd)
+            worker.output.connect(self.log_output)
+            worker.done_signal.connect(member_added)
+            worker.finished.connect(lambda: self.cleanup_thread(worker))
+            worker.start()
+            self.workers.append(worker)
+
+    def verify_settings(self, attempts=0):
+        """Verify the settings were applied correctly"""
+        self.log("\nVerifying group settings...")
+        
+        cmd = f"info group {self.group_email} settings"
+        
+        def verify_done(rc, lines):
+            if rc != 0:
+                if attempts < 3:
+                    self.log("\nSettings not updated yet, retrying...")
+                    time.sleep(2)
+                    self.verify_settings(attempts + 1)
+                else:
+                    self.log("\n[Error] Could not verify group settings.")
+                self.btn_start.setEnabled(True)
+                return
+            
+            self.log("\nGroup settings verified successfully.")
+            self.log("\nGroup creation workflow completed!")
+            self.btn_start.setEnabled(True)
+        
+        worker = WorkerThread(cmd)
+        worker.output.connect(self.log_output)
+        worker.done_signal.connect(verify_done)
+        worker.finished.connect(lambda: self.cleanup_thread(worker))
+        worker.start()
+        self.workers.append(worker)
+
+    def parse_addresses(self, text):
+        """Parse email addresses from text input"""
+        replaced = text.replace(",", " ")
+        return [x.strip() for x in replaced.split() if x.strip()]
+
     def show_warning(self, title, message):
         """Show a warning dialog"""
         dlg = QDialog(self)
