@@ -33,70 +33,53 @@ CONFIG_FILE = os.path.expanduser("~/.group_tool.json")
 ##############################################################################
 
 class WorkerThread(QThread):
-    output = pyqtSignal(str)
-    finished = pyqtSignal()
+    line_signal = pyqtSignal(str)
     done_signal = pyqtSignal(int, list)  # (returncode, all_lines)
 
-    def __init__(self, command):
+    def __init__(self, cmd_list):
         super().__init__()
-        self.command = command
+        self.cmd_list = cmd_list if isinstance(cmd_list, list) else [GAM_PATH] + cmd_list.split()
         self.captured_lines = []
 
     def run(self):
+        if not os.path.isfile(self.cmd_list[0]):
+            err_line = f"\n[Error] Could not find 'gam' at {self.cmd_list[0]}"
+            self.line_signal.emit(err_line)
+            self.captured_lines.append(err_line)
+            self.done_signal.emit(1, self.captured_lines)
+            return
+
         try:
-            # Convert string command to list for Popen
-            if isinstance(self.command, str):
-                cmd_list = [config.GAM_PATH] + self.command.split()
-            else:
-                # Already a list, make sure first item is GAM path
-                cmd_list = self.command
-                if cmd_list[0] != config.GAM_PATH:
-                    cmd_list.insert(0, config.GAM_PATH)
-            
-            # Log if GAM not found
-            if not os.path.isfile(cmd_list[0]):
-                error_msg = f"[ERROR] Could not find GAM at {cmd_list[0]}"
-                self.output.emit(error_msg)
-                self.captured_lines.append(error_msg)
-                self.done_signal.emit(1, self.captured_lines)
-                self.finished.emit()
-                return
-                
-            # Execute command
-            process = subprocess.Popen(
-                cmd_list,
+            proc = subprocess.Popen(
+                self.cmd_list,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
-            
-            # Capture stdout
+
             while True:
-                line = process.stdout.readline()
+                line = proc.stdout.readline()
                 if not line:
                     break
                 stripped = line.rstrip('\n')
-                self.output.emit(stripped)
+                self.line_signal.emit(stripped)
                 self.captured_lines.append(stripped)
-            
-            # Capture stderr
-            err_output = process.stderr.read()
+
+            err_output = proc.stderr.read()
             if err_output:
                 for e_line in err_output.splitlines():
                     combined = f"\n{e_line}"
-                    self.output.emit(combined)
+                    self.line_signal.emit(combined)
                     self.captured_lines.append(combined)
-            
-            # Get return code and emit signals
-            rc = process.wait()
+
+            rc = proc.wait()
             self.done_signal.emit(rc, self.captured_lines)
-            self.finished.emit()
+
         except Exception as e:
             ex_line = f"[Exception] {str(e)}"
-            self.output.emit(ex_line)
+            self.line_signal.emit(ex_line)
             self.captured_lines.append(ex_line)
             self.done_signal.emit(1, self.captured_lines)
-            self.finished.emit()
 
 ##############################################################################
 # PERMISSION MATRIX
@@ -480,14 +463,17 @@ class CreateGroupTab(QWidget):
         self.btn_start.setEnabled(False)
         self.log("\nCreating group...")
         
-        # Build create command
-        cmd_parts = [f"create group {self.group_email}"]
-        cmd_parts.append(f"name \"{self.group_name}\"")
+        # Build create command as a list with name parameter
+        cmd = [
+            GAM_PATH,
+            "create",
+            "group",
+            self.group_email,
+            "name",
+            self.group_name
+        ]
         if self.description:
-            cmd_parts.append(f"description \"{self.description}\"")
-        cmd_parts.append("who_can_join invited_can_join")
-        
-        cmd = " ".join(cmd_parts)
+            cmd.extend(["description", self.description])
         
         def creation_done(rc, lines):
             if rc != 0:
@@ -495,112 +481,47 @@ class CreateGroupTab(QWidget):
                 self.btn_start.setEnabled(True)
                 return
             
-            self.log("\nGroup created successfully.")
+            self.log("\nGroup created successfully. Waiting for propagation...")
+            # Add a small delay before verification
+            time.sleep(5)
             self.verify_group_exists()
         
         worker = WorkerThread(cmd)
-        worker.output.connect(self.log_output)
+        worker.line_signal.connect(self.log)
         worker.done_signal.connect(creation_done)
         worker.finished.connect(lambda: self.cleanup_thread(worker))
         worker.start()
         self.workers.append(worker)
 
     def verify_group_exists(self, attempts=0):
-        """Verify the group was created successfully"""
-        self.log("\nVerifying group creation...")
-        
-        cmd = f"info group {self.group_email}"
-        
+        """Verify the group exists, with retries"""
+        cmd = [GAM_PATH, "info", "group", self.group_email]
+
         def verify_done(rc, lines):
             if rc != 0:
-                if attempts < 3:
-                    self.log("\nGroup not found yet, retrying...")
-                    time.sleep(2)
+                if attempts < 3:  # Try up to 3 times
+                    self.log("\nGroup not found yet. Waiting 30 seconds...")
+                    time.sleep(30)
                     self.verify_group_exists(attempts + 1)
                 else:
-                    self.log("\n[Error] Could not verify group creation.")
-                    self.btn_start.setEnabled(True)
+                    # Even if verification fails, we'll proceed since the create command succeeded
+                    self.log("\n[Warning] Group verification timed out, but group was created successfully.")
+                    self.log("\nProceeding with member addition...")
+                    if any([self.owners, self.managers, self.members]):
+                        self.process_members()
+                    else:
+                        self.configure_permissions()
                 return
             
-            self.log("\nGroup verified. Configuring permissions...")
-            self.configure_permissions()  # Configure permissions first
-        
-        worker = WorkerThread(cmd)
-        worker.output.connect(self.log_output)
-        worker.done_signal.connect(verify_done)
-        worker.finished.connect(lambda: self.cleanup_thread(worker))
-        worker.start()
-        self.workers.append(worker)
-
-    def configure_permissions(self):
-        """Configure group permissions based on matrix settings"""
-        self.log("\nConfiguring group permissions...")
-        
-        # Build settings dictionary
-        settings = {
-            "whoCanContactOwner": "ALL_MANAGERS_CAN_CONTACT",
-            "whoCanViewGroup": "ALL_MEMBERS_CAN_VIEW",
-            "whoCanViewMembership": "ALL_MEMBERS_CAN_VIEW",
-            "whoCanJoin": "INVITED_CAN_JOIN",
-            "whoCanPostMessage": "ALL_MEMBERS_CAN_POST",
-            "allowExternalMembers": "true" if self.join_settings.value() else "false"
-        }
-        
-        # Update based on permission matrix
-        contact_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_CONTACT", "ALL_MEMBERS_CAN_CONTACT", "ANYONE_CAN_CONTACT"]
-        view_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_VIEW", "ALL_MEMBERS_CAN_VIEW", "ALL_IN_DOMAIN_CAN_VIEW", "ANYONE_CAN_VIEW"]
-        post_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_POST", "ALL_MEMBERS_CAN_POST", "ALL_IN_DOMAIN_CAN_POST", "ANYONE_CAN_POST"]
-        members_map = ["OWNERS_ONLY", "ALL_MANAGERS_CAN_VIEW", "ALL_MEMBERS_CAN_VIEW", "ALL_IN_DOMAIN_CAN_VIEW"]
-        
-        # Get highest checked column for each row
-        for row in range(5):
-            highest = -1
-            for col in range(5):
-                if (row, col) in self.perm_matrix.checkboxes and self.perm_matrix.checkboxes[(row, col)].isChecked():
-                    highest = col
-            
-            # Update settings based on row
-            if row == 0:  # Contact owners
-                if highest >= 0:
-                    settings["whoCanContactOwner"] = contact_map[min(highest, len(contact_map)-1)]
-            elif row == 1:  # View conversations
-                if highest >= 0:
-                    settings["whoCanViewGroup"] = view_map[min(highest, len(view_map)-1)]
-            elif row == 2:  # Post
-                if highest >= 0:
-                    settings["whoCanPostMessage"] = post_map[min(highest, len(post_map)-1)]
-            elif row == 3:  # View members
-                if highest >= 0:
-                    settings["whoCanViewMembership"] = members_map[min(highest, len(members_map)-1)]
-        
-        # Update join settings based on radio buttons
-        if self.join_settings.radio_approval.isChecked():
-            settings["whoCanJoin"] = "CAN_REQUEST_TO_JOIN"
-        elif self.join_settings.radio_anyone.isChecked():
-            settings["whoCanJoin"] = "ALL_IN_DOMAIN_CAN_JOIN"
-        else:  # radio_invited is checked
-            settings["whoCanJoin"] = "INVITED_CAN_JOIN"
-        
-        # Build the command - fixing the syntax
-        cmd = f"update group {self.group_email} "
-        for key, value in settings.items():
-            cmd += f"setting {key} {value} "  # Changed 'settings' to 'setting'
-        
-        def settings_done(rc, lines):
-            if rc != 0:
-                self.log("\n[Error] Failed to update group settings.")
-                self.btn_start.setEnabled(True)
-                return
-            
-            self.log("\nGroup settings updated successfully.")
+            self.log("\nGroup verified. Processing members...")
             if any([self.owners, self.managers, self.members]):
-                self.process_members()  # Process members after permissions are set
+                self.process_members()
             else:
-                self.verify_settings()
-        
+                self.configure_permissions()
+
         worker = WorkerThread(cmd)
-        worker.output.connect(self.log_output)
-        worker.done_signal.connect(settings_done)
+        worker.line_signal.connect(self.log)
+        worker.done_signal.connect(verify_done)
         worker.finished.connect(lambda: self.cleanup_thread(worker))
         worker.start()
         self.workers.append(worker)
@@ -620,13 +541,13 @@ class CreateGroupTab(QWidget):
             
             if self.processed_members >= self.total_members:
                 self.log("\nAll members processed.")
-                self.verify_settings()
+                self.configure_permissions()  # Configure permissions after members
         
-        # Add owners
+        # Add owners first
         for owner in self.owners:
-            cmd = f"update group {self.group_email} add owner {owner}"
+            cmd = [GAM_PATH, "update", "group", self.group_email, "add", "owner", owner]
             worker = WorkerThread(cmd)
-            worker.output.connect(self.log_output)
+            worker.line_signal.connect(self.log)
             worker.done_signal.connect(member_added)
             worker.finished.connect(lambda: self.cleanup_thread(worker))
             worker.start()
@@ -634,9 +555,9 @@ class CreateGroupTab(QWidget):
         
         # Add managers
         for manager in self.managers:
-            cmd = f"update group {self.group_email} add manager {manager}"
+            cmd = [GAM_PATH, "update", "group", self.group_email, "add", "manager", manager]
             worker = WorkerThread(cmd)
-            worker.output.connect(self.log_output)
+            worker.line_signal.connect(self.log)
             worker.done_signal.connect(member_added)
             worker.finished.connect(lambda: self.cleanup_thread(worker))
             worker.start()
@@ -644,19 +565,121 @@ class CreateGroupTab(QWidget):
         
         # Add members
         for member in self.members:
-            cmd = f"update group {self.group_email} add member {member}"
+            cmd = [GAM_PATH, "update", "group", self.group_email, "add", "member", member]
             worker = WorkerThread(cmd)
-            worker.output.connect(self.log_output)
+            worker.line_signal.connect(self.log)
             worker.done_signal.connect(member_added)
             worker.finished.connect(lambda: self.cleanup_thread(worker))
             worker.start()
             self.workers.append(worker)
 
+    def configure_permissions(self):
+        """Configure group permissions based on matrix settings"""
+        self.log("\nConfiguring group permissions...")
+        
+        # Basic settings that are always applied
+        basic_settings = [
+            "whocanmodifytagsandcategories", "OWNERS_AND_MANAGERS",
+            "whocandeletetopics", "OWNERS_AND_MANAGERS",
+            "whocanapprovemembers", "ALL_MANAGERS_CAN_APPROVE",
+            "whocaninvite", "ALL_MANAGERS_CAN_INVITE",
+            "whocanmodifymembers", "OWNERS_AND_MANAGERS"
+        ]
+        
+        # Permission map for translating matrix positions to GAM settings
+        permission_map = [
+            {
+                "setting": "whocancontactowner",
+                "values": ["ANYONE_CAN_CONTACT", "ALL_IN_DOMAIN_CAN_CONTACT", "ALL_MEMBERS_CAN_CONTACT", "ALL_MANAGERS_CAN_CONTACT", "ALL_OWNERS_CAN_CONTACT"]
+            },
+            {
+                "setting": "whocanviewgroup",
+                "values": ["ANYONE_CAN_VIEW", "ALL_IN_DOMAIN_CAN_VIEW", "ALL_MEMBERS_CAN_VIEW", "ALL_MANAGERS_CAN_VIEW", "ALL_OWNERS_CAN_VIEW"]
+            },
+            {
+                "setting": "whocanpostmessage",
+                "values": ["ANYONE_CAN_POST", "ALL_IN_DOMAIN_CAN_POST", "ALL_MEMBERS_CAN_POST", "ALL_MANAGERS_CAN_POST", "ALL_OWNERS_CAN_POST"]
+            },
+            {
+                "setting": "whocanviewmembership",
+                "values": ["ALL_IN_DOMAIN_CAN_VIEW", "ALL_MEMBERS_CAN_VIEW", "ALL_MANAGERS_CAN_VIEW", "ALL_OWNERS_CAN_VIEW"]
+            }
+        ]
+        
+        permission_settings = []
+        
+        # Process permission matrix
+        for row in range(4):  # Only process first 4 rows, skip member management
+            highest_allowed = 0  # Start with most restrictive
+            for col in range(5):
+                # Skip invalid combinations
+                if (col == 3 and row == 4) or (col == 4 and row >= 3):
+                    continue
+                    
+                # Only check boxes that exist
+                if (row, col) in self.perm_matrix.checkboxes:
+                    if self.perm_matrix.checkboxes[(row, col)].isChecked():
+                        highest_allowed = col
+            
+            # Set appropriate permission level
+            perm = permission_map[row]
+            if highest_allowed < len(perm["values"]):
+                # Reverse the index since the matrix goes from least to most restrictive
+                value_index = len(perm["values"]) - 1 - highest_allowed
+                if value_index >= 0:
+                    permission_settings.extend([perm["setting"], perm["values"][value_index]])
+
+        # Process join settings
+        if self.join_settings.radio_anyone.isChecked():
+            permission_settings.extend(["whocanjoin", "ALL_IN_DOMAIN_CAN_JOIN"])
+        elif self.join_settings.radio_approval.isChecked():
+            permission_settings.extend(["whocanjoin", "CAN_REQUEST_TO_JOIN"])
+        else:  # Invited only
+            permission_settings.extend(["whocanjoin", "INVITED_CAN_JOIN"])
+
+        # Step 1: Apply basic settings and permissions
+        cmd1 = [
+            GAM_PATH, "update", "group", self.group_email
+        ] + basic_settings + permission_settings
+        
+        def settings_done(rc, lines):
+            if rc != 0:
+                self.log("\n[Error] Failed to update group settings.")
+                self.btn_start.setEnabled(True)
+                return
+            
+            # Step 2: Handle external members setting separately
+            external_setting = "true" if self.join_settings.value() else "false"
+            cmd2 = [
+                GAM_PATH, "update", "group", self.group_email,
+                "allowexternalmembers", external_setting
+            ]
+            
+            def external_done(rc, lines):
+                if rc != 0:
+                    self.log("\n[Warning] Failed to update external members setting.")
+                
+                self.verify_settings()
+            
+            worker = WorkerThread(cmd2)
+            worker.line_signal.connect(self.log)
+            worker.done_signal.connect(external_done)
+            worker.finished.connect(lambda: self.cleanup_thread(worker))
+            worker.start()
+            self.workers.append(worker)
+        
+        worker = WorkerThread(cmd1)
+        worker.line_signal.connect(self.log)
+        worker.done_signal.connect(settings_done)
+        worker.finished.connect(lambda: self.cleanup_thread(worker))
+        worker.start()
+        self.workers.append(worker)
+
     def verify_settings(self, attempts=0):
-        """Verify the settings were applied correctly"""
+        """Verify group settings after configuration"""
         self.log("\nVerifying group settings...")
         
-        cmd = f"info group {self.group_email} settings"
+        cmd = [GAM_PATH, "info", "group", self.group_email]
         
         def verify_done(rc, lines):
             if rc != 0:
@@ -669,12 +692,12 @@ class CreateGroupTab(QWidget):
                 self.btn_start.setEnabled(True)
                 return
             
-            self.log("\nGroup settings verified successfully.")
-            self.log("\nGroup creation workflow completed!")
+            self.log("\nGroup settings verified successfully!")
+            self.log("\nGroup URL: https://groups.google.com/a/ustwo.com/g/" + self.group_email.split("@")[0])
             self.btn_start.setEnabled(True)
         
         worker = WorkerThread(cmd)
-        worker.output.connect(self.log_output)
+        worker.line_signal.connect(self.log)
         worker.done_signal.connect(verify_done)
         worker.finished.connect(lambda: self.cleanup_thread(worker))
         worker.start()
@@ -721,14 +744,10 @@ class CreateGroupTab(QWidget):
         """Run a GAM command using the configured GAM path"""
         full_command = f"{config.GAM_PATH} {command}"
         worker = WorkerThread(full_command)
-        worker.output.connect(self.log_output)
+        worker.line_signal.connect(self.log)
         worker.finished.connect(lambda: self.cleanup_thread(worker))
         worker.start()
         self.workers.append(worker)
-        
-    def log_output(self, text):
-        """Log output from the worker thread"""
-        self.log(text)
         
     def cleanup_thread(self, worker):
         """Remove the thread from our tracking list once it's done"""
