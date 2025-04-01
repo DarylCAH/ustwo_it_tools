@@ -2,9 +2,21 @@
 """
 A Python + PyQt5 script for creating Google Shared Drives, with an optional
 2-folder template copy, bulk membership adds, optional external/GDPR drives,
-and custom dialogs for all user interaction.
+and custom dialogs for all user interaction (no default QMessageBox).
+Thus, all pop-up dialogs share the same custom branding icon on macOS.
 
-This module can be run standalone or imported into the unified tools application.
+Key Points:
+1) If "Copy Client Folder Structure Template files?" is unchecked, we only create
+   the main drive and add members (no external/GDPR drive prompts).
+2) The main window has a logo at the top-left, fields to the right.
+3) We show web-based roles (Manager, Content Manager, Contributor, Commenter, Viewer)
+   but convert them to gam-based roles for commands.
+4) We parse each drive creation's output to get the correct ID.
+5) We store WorkerThreads to avoid "QThread: Destroyed while thread is still running."
+6) All prompts use custom dialogs: no standard QMessageBox or QInputDialog.
+   This ensures consistent branding icons in all pop-ups on macOS.
+
+Adjust GAM_PATH, CLIENT_FOLDER_ID, INTERNAL_FOLDER_ID as needed.
 """
 
 import sys
@@ -12,19 +24,19 @@ import os
 import re
 import subprocess
 import json
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QLineEdit, QPushButton, QTextEdit, QCheckBox, QDialog, QDialogButtonBox,
-    QPlainTextEdit, QComboBox, QGroupBox, QScrollArea, QMessageBox
+    QPlainTextEdit, QComboBox
 )
-from . import config
 
-# Path to GAM binary
+# Path to your 'gam' binary
 GAM_PATH = os.path.expanduser("~/bin/gam7/gam")
 
-# Template folder ID with contents to copy
+# Template folder with contents to copy
 INTERNAL_FOLDER_ID = "1rfE8iB-kt96m5JSJwX-X87OxTI5J7hIi"
 
 # Config file for persistent settings
@@ -40,15 +52,14 @@ WEB_TO_GAM = {
 }
 WEB_ROLE_LIST = list(WEB_TO_GAM.keys())
 
+
 ##############################################################################
 # WORKER THREAD for GAM COMMANDS
 ##############################################################################
 
 class WorkerThread(QThread):
-    """Worker thread for executing GAM commands"""
     line_signal = pyqtSignal(str)
     done_signal = pyqtSignal(int, list)  # (returncode, all_lines)
-    finished = pyqtSignal()  # Add finished signal for backward compatibility
 
     def __init__(self, cmd_list):
         super().__init__()
@@ -61,7 +72,6 @@ class WorkerThread(QThread):
             self.line_signal.emit(err_line)
             self.captured_lines.append(err_line)
             self.done_signal.emit(1, self.captured_lines)
-            self.finished.emit()
             return
 
         try:
@@ -95,8 +105,7 @@ class WorkerThread(QThread):
             self.line_signal.emit(ex_line)
             self.captured_lines.append(ex_line)
             self.done_signal.emit(1, self.captured_lines)
-        
-        self.finished.emit()
+
 
 ##############################################################################
 # CUSTOM DIALOGS
@@ -134,6 +143,41 @@ class CustomYesNoDialog(QDialog):
         dlg = CustomYesNoDialog(title, question, parent)
         result = dlg.exec_()
         return (result == QDialog.Accepted)
+
+
+class MultiLineAddressesDialog(QDialog):
+    """
+    A multiline text box for entering addresses.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Enter Addresses")
+        self.setWindowIcon(QIcon("/Library/JAMF/Icon/brandingimage.icns"))
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        self.text_edit = QPlainTextEdit()
+        self.text_edit.setPlaceholderText("Paste addresses here, separated by spaces or commas...")
+        self.text_edit.setFixedHeight(200)
+        layout.addWidget(self.text_edit)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def get_text(self):
+        return self.text_edit.toPlainText()
+
+    @staticmethod
+    def get_addresses(parent=None):
+        dlg = MultiLineAddressesDialog(parent)
+        result = dlg.exec_()
+        if result == QDialog.Accepted:
+            return dlg.get_text()
+        else:
+            return ""
+
 
 class SelectRoleDialog(QDialog):
     """
@@ -173,65 +217,27 @@ class SelectRoleDialog(QDialog):
         else:
             return ""
 
-class MultiLineAddressesDialog(QDialog):
-    """
-    A multiline text box for entering addresses.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Enter Addresses")
-        self.setWindowIcon(QIcon("/Library/JAMF/Icon/brandingimage.icns"))
-        self.setModal(True)
-
-        layout = QVBoxLayout(self)
-        self.text_edit = QPlainTextEdit()
-        self.text_edit.setPlaceholderText("Paste addresses here, separated by spaces or commas...")
-        self.text_edit.setFixedHeight(200)
-        layout.addWidget(self.text_edit)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-    def get_text(self):
-        return self.text_edit.toPlainText()
-
-    @staticmethod
-    def get_addresses(parent=None):
-        dlg = MultiLineAddressesDialog(parent)
-        result = dlg.exec_()
-        if result == QDialog.Accepted:
-            return dlg.get_text()
-        else:
-            return ""
 
 ##############################################################################
 # MAIN WINDOW
 ##############################################################################
 
-class SharedDriveTab(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
         self.setWindowTitle("Google Shared Drive Creation Tool")
-        self.settings = config.load_config(config.DRIVE_CONFIG)
-        self.init_ui()
 
-    def init_ui(self):
         self.workers = []
-        self.drive_ids = {}
-        self.main_members = []
-        self.processed_count = 0
-        self.total_addresses = 0
-        self.processed_pairs = 0
-        self.total_pairs = 0
-        
-        # Main layout
-        main_layout = QVBoxLayout(self)
+        self.drive_ids = {}     # { "main": "...", "external": "...", "gdpr": "..." }
+        self.main_members = []  # [(web_role, [emails])]
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        self.main_layout = QVBoxLayout(central)
 
         # Top area: logo left, fields right
         top_hbox = QHBoxLayout()
-        main_layout.addLayout(top_hbox)
+        self.main_layout.addLayout(top_hbox)
 
         self.logo_label = QLabel()
         pixmap = QPixmap("/Library/JAMF/Icon/brandingimage.icns")
@@ -263,11 +269,11 @@ class SharedDriveTab(QWidget):
         # Log area
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-        main_layout.addWidget(self.log_area)
+        self.main_layout.addWidget(self.log_area)
 
         # Buttons
         btn_hbox = QHBoxLayout()
-        main_layout.addLayout(btn_hbox)
+        self.main_layout.addLayout(btn_hbox)
 
         self.btn_start = QPushButton("Start Workflow")
         self.btn_start.clicked.connect(self.handle_workflow)
@@ -277,7 +283,7 @@ class SharedDriveTab(QWidget):
         self.btn_quit.clicked.connect(self.close)
         btn_hbox.addWidget(self.btn_quit)
 
-        self.setMinimumSize(900, 600)
+        self.resize(900, 600)
         
         # Load saved email
         self.load_config()
@@ -313,82 +319,222 @@ class SharedDriveTab(QWidget):
     def log(self, text):
         self.log_area.append(text)
 
+    ########################################################################
+    # MAIN WORKFLOW
+    ########################################################################
+
     def handle_workflow(self):
-        """Handle the workflow start button click"""
-        # Get user inputs
+        self.log_area.clear()
+        self.drive_ids.clear()
+        self.main_members.clear()
+
         self.user_email = self.input_email.text().strip()
         self.base_drive_name = self.input_drive.text().strip()
-        self.do_copy = "Yes" if self.copy_checkbox.isChecked() else "No"
-        
-        # Clean up previous states
-        self.log_area.clear()
-        self.drive_ids = {}
-        self.main_members = []
-        self.processed_count = 0
-        self.total_addresses = 0
-        self.processed_pairs = 0
-        self.total_pairs = 0
-        
-        # Validate inputs
-        if not self.user_email:
-            self.show_warning("Missing Information", "Please enter your email address.")
+        if not self.user_email or not self.base_drive_name:
+            self.show_warning("Missing Info", "Please provide an email and drive name.")
             return
             
-        if not self.base_drive_name:
-            self.show_warning("Missing Information", "Please enter a name for the new shared drive.")
-            return
-            
-        # Save the settings
-        self.settings["email"] = self.user_email
+        # Save the email for future use
         self.save_config()
-        
-        # Start the workflow
+
         self.log(f"\nStarting workflow for base drive '{self.base_drive_name}' with user {self.user_email}")
-        
-        # Create the main shared drive
+        self.do_copy = "Yes" if self.copy_checkbox.isChecked() else ""
+
         self.create_shared_drive("main", "", self.do_copy, next_step=self.after_main_created)
 
-    def create_shared_drive(self, drive_type, modifier, do_copy, next_step=None):
-        """Create a Google Shared Drive based on the provided parameters"""
-        self.btn_start.setEnabled(False)
+    def after_main_created(self):
+        main_id = self.drive_ids.get("main")
+        if not main_id:
+            self.log("\n[Error] No main drive ID found, skipping membership.")
+            if self.do_copy == "Yes":
+                self.ask_external_drive()
+            else:
+                self.end_workflow()
+            return
+
+        self.log("\nNow add members to the main drive.")
+        self.bulk_add_members(drive_id=main_id, store_in_main=True, label="main", next_step=self.decide_post_main)
+
+    def decide_post_main(self):
+        if self.do_copy == "Yes":
+            self.ask_external_drive()
+        else:
+            self.end_workflow()
+
+    ########################################################################
+    # EXTERNAL & GDPR
+    ########################################################################
+
+    def ask_external_drive(self):
+        yes = CustomYesNoDialog.ask(
+            "External Drive?",
+            "Create an external drive?",
+            parent=self
+        )
+        if yes:
+            same = CustomYesNoDialog.ask(
+                "Use same membership?",
+                "Use the same members & roles as the main drive?\n"
+                "\nYes = Add the exact same users and roles (additional members can be added after)\n"
+                "\nNo = Add a different set of users.",
+                parent=self
+            )
+            self.create_shared_drive("external", " (External)", "",
+                                     next_step=lambda: self.after_ext_created(same))
+        else:
+            self.log("\nNot creating external drive.")
+            self.ask_gdpr_drive()
+
+    def after_ext_created(self, use_same):
+        ext_id = self.drive_ids.get("external")
+        if not ext_id:
+            self.log("\n[Error] No external drive ID found.")
+            self.ask_gdpr_drive()
+            return
+
+        if use_same and self.main_members:
+            self.log("\nRe-adding main drive members to the external drive...")
+            self.re_add_members("external", ext_id, next_step=self.ask_gdpr_drive)
+        else:
+            self.log("\nNew membership flow for the external drive...")
+            self.bulk_add_members(drive_id=ext_id, store_in_main=False, label="external", next_step=self.ask_gdpr_drive)
+
+    def ask_gdpr_drive(self):
+        yes = CustomYesNoDialog.ask(
+            "GDPR Drive?",
+            "Create a GDPR drive?",
+            parent=self
+        )
+        if yes:
+            same = CustomYesNoDialog.ask(
+                "Use same membership?",
+                "Use the same members & roles as the main drive?\n"
+                "\nYes = Add the exact same users and roles (additional members can be added after)\n"
+                "\nNo = Add a different set of users.",
+                parent=self
+            )
+            self.create_shared_drive("gdpr", " (GDPR)", "",
+                                     next_step=lambda: self.after_gdpr_created(same))
+        else:
+            self.log("\nNot creating GDPR drive.")
+            self.end_workflow()
+
+    def after_gdpr_created(self, use_same):
+        gdpr_id = self.drive_ids.get("gdpr")
+        if not gdpr_id:
+            self.log("\n[Error] No gdpr drive ID found.")
+            self.end_workflow()
+            return
+
+        if use_same and self.main_members:
+            self.log("\nRe-adding main drive members to the gdpr drive...")
+            self.re_add_members("gdpr", gdpr_id, next_step=self.end_workflow)
+        else:
+            self.log("\nNew membership flow for the gdpr drive...")
+            self.bulk_add_members(drive_id=gdpr_id, store_in_main=False, label="gdpr", next_step=self.end_workflow)
+
+    def end_workflow(self):
+        # Ask if user wants to remove themselves from drives
+        self.ask_remove_self()
+
+    def ask_remove_self(self):
+        """Ask if the user wants to be removed from all created drives"""
+        if not self.drive_ids:
+            self.display_drive_urls()
+            return
+            
+        yes = CustomYesNoDialog.ask(
+            "Remove Self?",
+            f"Would you like to remove your email address ({self.user_email}) as a member from all created drives?",
+            parent=self
+        )
+        if yes:
+            self.log(f"\nRemoving {self.user_email} from all created drives...")
+            self.remove_self_from_drives(next_step=self.display_drive_urls)
+        else:
+            self.display_drive_urls()
+            
+    def remove_self_from_drives(self, next_step):
+        """Remove the user from all created drives"""
+        drive_count = len(self.drive_ids)
+        self.processed_count = 0  # Using instance variable to track count
         
-        # Determine the drive name - ensure valid drive names
-        drive_name = self.base_drive_name
-        if drive_type != "main":
-            drive_name = f"{self.base_drive_name}{modifier}"
+        for label, drive_id in self.drive_ids.items():
+            self.log(f"\nRemoving {self.user_email} from {label} drive ({drive_id})...")
+            cmd = [
+                GAM_PATH, "delete", "drivefileacl", drive_id,
+                self.user_email
+            ]
+            
+            def removal_done(rc, lines, current_label=label):
+                self.processed_count += 1
+                
+                if rc != 0:
+                    self.log(f"\n[Warning] Could not remove {self.user_email} from {current_label} drive.")
+                else:
+                    self.log(f"\nSuccessfully removed {self.user_email} from {current_label} drive.")
+                
+                # If we've processed all drives, move to next step
+                if self.processed_count >= drive_count and next_step:
+                    next_step()
+            
+            self.run_threaded_command(cmd, removal_done)
+    
+    def display_drive_urls(self):
+        """Display URLs for all created drives"""
+        if not self.drive_ids:
+            self.log("\nNo drives were created in this session.")
+            return
+            
+        self.log("\n" + "="*50)
+        self.log("\nSUMMARY OF CREATED DRIVES:")
         
-        self.log(f"\n[Info] Creating {drive_type} drive: {drive_name}...")
+        for label, drive_id in self.drive_ids.items():
+            drive_name = f"{self.base_drive_name}{' (External)' if label == 'external' else ' (GDPR)' if label == 'gdpr' else ''}"
+            drive_url = f"https://drive.google.com/drive/folders/{drive_id}"
+            self.log(f"\n{drive_name}:")
+            self.log(f"{drive_url}")
         
+        self.log("\n" + "="*50)
+        self.log("\nAll requested operations completed.")
+
+    ########################################################################
+    # CREATE SHARED DRIVE
+    ########################################################################
+
+    def create_shared_drive(self, label, suffix, copy_template, next_step):
+        drive_name = f"{self.base_drive_name}{suffix}"
+        self.log(f"\nCreating {label} drive: {drive_name}...")
+
         cmd = [
             GAM_PATH, "user", self.user_email,
             "create", "teamdrive", drive_name,
             "adminmanagedrestrictions", "true", "asadmin"
         ]
-        
         def creation_done(rc, lines):
             if rc != 0:
-                self.log(f"\n[Error] 'create teamdrive' command for the {drive_type} drive failed.")
+                self.log(f"\n[Error] 'create teamdrive' command for the {label} drive failed.")
                 if next_step:
-                    self.set_next_step(next_step)
+                    next_step()
                 return
-            
-            drive_id = self.parse_drive_id(lines)
-            if not drive_id:
-                self.log(f"\n[Error] Could not parse the {drive_type} drive ID.")
+
+            new_id = self.parse_drive_id(lines)
+            if not new_id:
+                self.log(f"\n[Error] Could not parse the {label} drive ID.")
                 if next_step:
-                    self.set_next_step(next_step)
+                    next_step()
                 return
-            
-            self.drive_ids[drive_type] = drive_id
-            self.log(f"\nDrive '{drive_type}' created successfully. ID={drive_id}")
-            
-            if drive_type == "main" and do_copy == "Yes":
+
+            self.drive_ids[label] = new_id
+            self.log(f"\nDrive '{label}' created successfully. ID={new_id}")
+
+            if label == "main" and copy_template == "Yes":
                 self.log("\nCopying folder structure template to the main drive...")
-                self.copy_folder_contents(drive_id, next_step)
+                self.copy_folder_contents(new_id, next_step)
             else:
                 if next_step:
-                    self.set_next_step(next_step)
-        
+                    next_step()
+
         self.run_threaded_command(cmd, creation_done)
 
     def copy_folder_contents(self, drive_id, next_step):
@@ -417,7 +563,7 @@ class SharedDriveTab(QWidget):
             if rc != 0:
                 self.log("\n[Error] Failed to copy the template folder.")
                 if next_step:
-                    self.set_next_step(next_step)
+                    next_step()
                 return
             
             # Extract the ID of the copied folder
@@ -431,9 +577,9 @@ class SharedDriveTab(QWidget):
             if not copied_folder_id:
                 self.log("\n[Error] Could not identify copied folder ID.")
                 if next_step:
-                    self.set_next_step(next_step)
+                    next_step()
                 return
-            
+                
             self.log(f"\nTemplate folder copied with ID: {copied_folder_id}")
             
             # Step 2: List contents of the copied folder (now we own this copy)
@@ -441,7 +587,7 @@ class SharedDriveTab(QWidget):
             self.list_copied_contents(copied_folder_id, drive_id, next_step)
         
         self.run_threaded_command(cmd, after_folder_copy)
-
+    
     def list_copied_contents(self, folder_id, drive_id, next_step):
         """List contents of the copied folder"""
         cmd = [
@@ -455,7 +601,7 @@ class SharedDriveTab(QWidget):
             if rc != 0:
                 self.log("\n[Error] Failed to list contents of copied folder.")
                 if next_step:
-                    self.set_next_step(next_step)
+                    next_step()
                 return
             
             # Parse contents
@@ -473,13 +619,13 @@ class SharedDriveTab(QWidget):
                 # Delete the empty folder
                 self.delete_template_folder(folder_id, drive_id, next_step)
                 return
-            
+                
             self.log(f"\nFound {len(items)} items in the copied folder.")
             # Move each item to the drive root
             self.move_items_to_root(items, folder_id, drive_id, next_step)
         
         self.run_threaded_command(cmd, process_contents)
-
+    
     def move_items_to_root(self, items, folder_id, drive_id, next_step):
         """Move items from the copied folder to the drive root"""
         self.move_count = 0
@@ -507,7 +653,7 @@ class SharedDriveTab(QWidget):
                     self.delete_template_folder(folder_id, drive_id, next_step)
             
             self.run_threaded_command(cmd, after_move)
-
+    
     def delete_template_folder(self, folder_id, drive_id, next_step):
         """Delete the template folder after moving its contents"""
         self.log("\nDeleting the copied template folder (contents already moved to root)...")
@@ -525,311 +671,20 @@ class SharedDriveTab(QWidget):
             
             self.log("\nFolder structure successfully copied to drive root.")
             if next_step:
-                self.set_next_step(next_step)
+                next_step()
         
         self.run_threaded_command(cmd, after_delete)
 
-    def log_output(self, text):
-        """Log output from the worker thread"""
-        self.log(text)
-
-    def cleanup_thread(self, worker):
-        """Remove the thread from our tracking list once it's done"""
-        if worker in self.workers:
-            self.workers.remove(worker)
-            self.command_finished()
-
-    def command_finished(self):
-        """Process command completion and handle next steps"""
-        if not self.workers:
-            # Only enable the button if we're at the end of a workflow
-            if not hasattr(self, 'next_step') or self.next_step is None:
-                self.btn_start.setEnabled(True)
-                
-            # Call next_step if available - important to do this before returning
-            QTimer.singleShot(500, self.execute_next_step)
-
     def parse_drive_id(self, lines):
-        """Parse the drive ID from command output"""
         for line in lines:
             m = re.search(r"Shared Drive ID:\s*(\S+)", line)
             if m:
                 return m.group(1).rstrip(',')
         return ""
 
-    def set_next_step(self, next_step):
-        """Set the next step to execute and schedule it if no workers are active"""
-        self.next_step = next_step
-        
-        # If no workers are active, schedule the next step immediately
-        if not self.workers:
-            QTimer.singleShot(500, self.execute_next_step)
-    
-    def execute_next_step(self):
-        """Execute the stored next step if available"""
-        if hasattr(self, 'next_step') and self.next_step:
-            next_step = self.next_step
-            self.next_step = None  # Clear to prevent multiple executions
-            next_step()
-
-    def after_main_created(self):
-        """Handle workflow after main drive is created"""
-        main_id = self.drive_ids.get("main")
-        if not main_id:
-            self.log("\n[Error] No main drive ID found, skipping membership.")
-            if self.do_copy == "Yes":
-                self.ask_external_drive()
-            else:
-                self.end_workflow()
-            return
-
-        self.log("\nNow add members to the main drive.")
-        self.bulk_add_members(drive_id=main_id, store_in_main=True, label="main", next_step=self.decide_post_main)
-        
-    def decide_post_main(self):
-        """Decide what to do after main drive setup is complete"""
-        if self.do_copy == "Yes":
-            self.ask_external_drive()
-        else:
-            self.end_workflow()
-
-    def ask_external_drive(self):
-        """Ask if user wants to create an external drive"""
-        yes = CustomYesNoDialog.ask(
-            "External Drive?",
-            "Create an external drive?",
-            parent=self
-        )
-        if yes:
-            same = CustomYesNoDialog.ask(
-                "Use same membership?",
-                "Use the same members & roles as the main drive?\n"
-                "\nYes = Add the exact same users and roles (additional members can be added after)\n"
-                "\nNo = Add a different set of users.",
-                parent=self
-            )
-            self.create_shared_drive("external", " (External)", "",
-                                     next_step=lambda: self.after_external_created(same))
-        else:
-            self.log("\nNot creating external drive.")
-            self.ask_gdpr_drive()
-            
-    def ask_gdpr_drive(self):
-        """Ask if user wants to create a GDPR drive"""
-        yes = CustomYesNoDialog.ask(
-            "GDPR Drive?",
-            "Create a GDPR drive?",
-            parent=self
-        )
-        if yes:
-            same = CustomYesNoDialog.ask(
-                "Use same membership?",
-                "Use the same members & roles as the main drive?\n"
-                "\nYes = Add the exact same users and roles (additional members can be added after)\n"
-                "\nNo = Add a different set of users.",
-                parent=self
-            )
-            self.create_shared_drive("gdpr", " (GDPR)", "",
-                                     next_step=lambda: self.after_gdpr_created(same))
-        else:
-            self.log("\nNot creating GDPR drive.")
-            self.end_workflow()
-            
-    def end_workflow(self):
-        """End the workflow and ask about removing self"""
-        self.ask_remove_self()
-        
-    def ask_remove_self(self):
-        """Ask if the user wants to be removed from all created drives"""
-        if not self.drive_ids:
-            self.display_drive_urls()
-            return
-            
-        yes = CustomYesNoDialog.ask(
-            "Remove Self?",
-            f"Would you like to remove your email address ({self.user_email}) as a member from all created drives?",
-            parent=self
-        )
-        if yes:
-            self.log(f"\nRemoving {self.user_email} from all created drives...")
-            self.remove_self_from_drives(next_step=self.display_drive_urls)
-        else:
-            self.display_drive_urls()
-
-    def remove_self_from_drives(self, next_step):
-        """Remove the user from all created drives"""
-        drive_count = len(self.drive_ids)
-        self.processed_count = 0
-        
-        for label, drive_id in self.drive_ids.items():
-            self.log(f"\nRemoving {self.user_email} from {label} drive ({drive_id})...")
-            cmd = [
-                GAM_PATH,
-                "delete", "drivefileacl", drive_id,
-                self.user_email
-            ]
-            
-            # Create worker before defining callback
-            worker = WorkerThread(cmd)
-            
-            def removal_done(rc, lines, current_label=label, w=worker):
-                # Don't call cleanup here as it will be called by the finished signal
-                self.processed_count += 1
-                
-                if rc != 0:
-                    self.log(f"\n[Warning] Could not remove {self.user_email} from {current_label} drive.")
-                else:
-                    self.log(f"\nSuccessfully removed {self.user_email} from {current_label} drive.")
-                
-                if self.processed_count >= drive_count and next_step:
-                    self.set_next_step(next_step)
-            
-            # Connect signals consistently
-            worker.line_signal.connect(self.log_output)
-            worker.done_signal.connect(removal_done)
-            worker.finished.connect(lambda w=worker: self.cleanup_thread(w))
-            worker.start()
-            self.workers.append(worker)
-
-    def display_drive_urls(self):
-        """Display URLs for all created drives"""
-        if not self.drive_ids:
-            self.log("\nNo drives were created in this session.")
-            return
-            
-        self.log("\n" + "="*50)
-        self.log("\nSUMMARY OF CREATED DRIVES:")
-        
-        for label, drive_id in self.drive_ids.items():
-            drive_name = f"{self.base_drive_name}{' (External)' if label == 'external' else ' (GDPR)' if label == 'gdpr' else ''}"
-            drive_url = f"https://drive.google.com/drive/folders/{drive_id}"
-            self.log(f"\n{drive_name}:")
-            self.log(f"{drive_url}")
-        
-        self.log("\n" + "="*50)
-        self.log("\nAll requested operations completed.")
-        self.btn_start.setEnabled(True)
-
-    def show_warning(self, title, message):
-        """Show a single-button OK dialog with branding icon."""
-        dlg = QDialog(self)
-        dlg.setWindowTitle(title)
-        dlg.setWindowIcon(QIcon("/Library/JAMF/Icon/brandingimage.icns"))
-        layout = QVBoxLayout(dlg)
-
-        lbl = QLabel(message)
-        lbl.setWordWrap(True)
-        layout.addWidget(lbl)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
-        buttons.accepted.connect(dlg.accept)
-        layout.addWidget(buttons)
-
-        dlg.exec_()
-
-    def closeEvent(self, event):
-        for w in self.workers:
-            if w.isRunning():
-                self.log("\n[Info] Waiting for a background thread to finish...")
-                w.wait(2000)
-                if w.isRunning():
-                    self.log("\n[Warning] Forcibly terminating leftover thread.")
-                    w.terminate()
-        super().closeEvent(event)
-
-    def save_settings(self):
-        """Save current settings to config file"""
-        config.save_config(config.DRIVE_CONFIG, self.settings)
-
-    def run_threaded_command(self, cmd_list, callback):
-        """Run a GAM command in a thread with proper callback handling"""
-        worker = WorkerThread(cmd_list)
-        self.workers.append(worker)
-
-        # Connect to log_output method, not directly to log
-        worker.line_signal.connect(self.log_output)
-
-        def on_done(rc, lines):
-            callback(rc, lines)
-
-        worker.done_signal.connect(on_done)
-        
-        # Use a proper lambda to capture worker
-        worker.finished.connect(lambda w=worker: self.cleanup_thread(w))
-        worker.start()
-
-    def run_blocking_command(self, cmd_list):
-        """Run a GAM command and block until it completes"""
-        try:
-            proc = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            out, err = proc.communicate()
-            if out:
-                for line in out.splitlines():
-                    self.log(line)
-            if err:
-                for e_line in err.splitlines():
-                    self.log(f"\n{e_line}")
-        except Exception as e:
-            self.log(f"\n[Exception] {str(e)}")
-
-    def get_current_drive_type(self, command):
-        """Extract drive type from the command context"""
-        if 'External' in command:
-            return 'external'
-        elif 'GDPR' in command:
-            return 'gdpr'
-        else:
-            return 'main'
-        
-    def handle_drive_creation(self, rc, lines, drive_type):
-        """Handle the completion of a drive creation command"""
-        if rc != 0:
-            self.log(f"\n[Error] 'create teamdrive' command for the {drive_type} drive failed.")
-            return
-            
-        new_id = self.parse_drive_id(lines)
-        if not new_id:
-            self.log(f"\n[Error] Could not parse the {drive_type} drive ID.")
-            return
-            
-        self.drive_ids[drive_type] = new_id
-        self.log(f"\nDrive '{drive_type}' created successfully. ID={new_id}")
-        
-        # For main drive with copy template option
-        if drive_type == "main" and hasattr(self, 'do_copy') and self.do_copy == "Yes":
-            self.log("\nCopying folder structure template to the main drive...")
-            # Add template folder ID to config
-            self.copy_folder_contents(new_id, INTERNAL_FOLDER_ID)
-            
-    def after_external_created(self, use_same):
-        """Handle workflow after external drive is created"""
-        external_id = self.drive_ids.get("external")
-        if not external_id:
-            self.log("\n[Error] No external drive ID found.")
-            self.ask_gdpr_drive()
-            return
-
-        if use_same and self.main_members:
-            self.log("\nRe-adding main drive members to the external drive...")
-            self.re_add_members("external", external_id, next_step=self.ask_gdpr_drive)
-        else:
-            self.log("\nNew membership flow for the external drive...")
-            self.bulk_add_members(drive_id=external_id, store_in_main=False, label="external", next_step=self.ask_gdpr_drive)
-        
-    def after_gdpr_created(self, use_same):
-        """Handle workflow after GDPR drive is created"""
-        gdpr_id = self.drive_ids.get("gdpr")
-        if not gdpr_id:
-            self.log("\n[Error] No gdpr drive ID found.")
-            self.end_workflow()
-            return
-
-        if use_same and self.main_members:
-            self.log("\nRe-adding main drive members to the gdpr drive...")
-            self.re_add_members("gdpr", gdpr_id, next_step=self.end_workflow)
-        else:
-            self.log("\nNew membership flow for the gdpr drive...")
-            self.bulk_add_members(drive_id=gdpr_id, store_in_main=False, label="gdpr", next_step=self.end_workflow)
+    ########################################################################
+    # MEMBERSHIP
+    ########################################################################
 
     def bulk_add_members(self, drive_id, store_in_main, label, next_step):
         """
@@ -860,8 +715,7 @@ class SharedDriveTab(QWidget):
             for addr in addresses:
                 self.log(f"\nAdding {addr} as {web_role} to the {label} drive...")
                 cmd = [
-                    GAM_PATH, "user", self.user_email,
-                    "add", "drivefileacl", drive_id,
+                    GAM_PATH, "add", "drivefileacl", drive_id,
                     "user", addr, "role", gam_role
                 ]
                 self.run_blocking_command(cmd)
@@ -875,14 +729,13 @@ class SharedDriveTab(QWidget):
                 break
 
         if next_step:
-            self.set_next_step(next_step)
+            next_step()
 
     def re_add_members(self, label, drive_id, next_step):
-        """Re-add members from main drive to another drive"""
         if not self.main_members:
             self.log(f"\n[Warning] No stored main membership found for the {label} drive.")
             if next_step:
-                self.set_next_step(next_step)
+                next_step()
             return
 
         for (web_role, addresses) in self.main_members:
@@ -890,8 +743,7 @@ class SharedDriveTab(QWidget):
             for addr in addresses:
                 self.log(f"\nRe-adding {addr} as {web_role} to the {label} drive...")
                 cmd = [
-                    GAM_PATH, "user", self.user_email,
-                    "add", "drivefileacl", drive_id,
+                    GAM_PATH, "add", "drivefileacl", drive_id,
                     "user", addr, "role", gam_role
                 ]
                 self.run_blocking_command(cmd)
@@ -902,15 +754,78 @@ class SharedDriveTab(QWidget):
             self.bulk_add_members(drive_id=drive_id, store_in_main=False, label=label, next_step=next_step)
         else:
             if next_step:
-                self.set_next_step(next_step)
+                next_step()
 
-def standalone():
-    """Run this tool as a standalone application"""
+    ########################################################################
+    # RUNNING COMMANDS
+    ########################################################################
+
+    def run_blocking_command(self, cmd_list):
+        try:
+            proc = subprocess.Popen(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            out, err = proc.communicate()
+            if out:
+                for line in out.splitlines():
+                    self.log(line)
+            if err:
+                for e_line in err.splitlines():
+                    self.log(f"\n{e_line}")
+        except Exception as e:
+            self.log(f"\n[Exception] {str(e)}")
+
+    def run_threaded_command(self, cmd_list, callback):
+        worker = WorkerThread(cmd_list)
+        self.workers.append(worker)
+
+        worker.line_signal.connect(self.log)
+
+        def on_done(rc, lines):
+            callback(rc, lines)
+
+        worker.done_signal.connect(on_done)
+        worker.start()
+
+    ########################################################################
+    # UTILITY
+    ########################################################################
+
+    def show_warning(self, title, message):
+        """Show a single-button OK dialog with branding icon."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setWindowIcon(QIcon("/Library/JAMF/Icon/brandingimage.icns"))
+        layout = QVBoxLayout(dlg)
+
+        lbl = QLabel(message)
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dlg.accept)
+        layout.addWidget(buttons)
+
+        dlg.exec_()
+
+    def closeEvent(self, event):
+        for w in self.workers:
+            if w.isRunning():
+                self.log("\n[Info] Waiting for a background thread to finish...")
+                w.wait(2000)
+                if w.isRunning():
+                    self.log("\n[Warning] Forcibly terminating leftover thread.")
+                    w.terminate()
+        super().closeEvent(event)
+
+
+def main():
     app = QApplication(sys.argv)
+    # Set an app-wide icon so new windows also share it by default
     app.setWindowIcon(QIcon("/Library/JAMF/Icon/brandingimage.icns"))
-    w = SharedDriveTab()
+
+    w = MainWindow()
     w.show()
     sys.exit(app.exec_())
 
+
 if __name__ == "__main__":
-    standalone() 
+    main()
