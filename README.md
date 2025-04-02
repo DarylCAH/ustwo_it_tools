@@ -5,13 +5,53 @@ A collection of Python tools for IT administration at ustwo, including:
 - Shared Drive administration
 - Offboarding automation
 
+## Features
+
+### Google Group Management
+- Create new Google Groups with specified settings
+- Add and manage members with different permission levels
+- Set group visibility and access settings
+
+### Shared Drive Administration
+- Create main, external, and GDPR-compliant shared drives
+- Add members with customizable roles (Manager, Content Manager, Contributor, etc.)
+- Automatically copy folder templates to new drives
+- Option to use the same members across multiple drives
+- Separate workflows for each drive type (main, external, GDPR)
+
+### Offboarding Automation
+- Automate the removal of user access from various systems
+- Track offboarding progress and completion
+
+## Requirements
+
+### System Requirements
+- **Platform**: macOS with Apple Silicon (M1/M2/M3 series)
+- **OS Version**: macOS 11 Big Sur or newer
+- **Architecture**: arm64 (bundled app is compiled for Apple Silicon)
+- **Disk Space**: ~30MB for the application
+
+### Prerequisite Software
+- **GAM Command-line Tool**: Must be installed at `~/bin/gam7/gam` with proper Google API permissions configured
+- **JAMF Branding Image**: Expected at `/Library/JAMF/Icon/brandingimage.icns` for UI elements
+- **Google Workspace Admin Account**: Required for performing administrative actions
+
 ## Setup
 
+### For Development
 1. Make sure you have Python 3.x installed
 2. Install the required dependencies:
    ```
    pip3 install -r requirements.txt
    ```
+
+### Required Python Packages (for development only)
+- PyQt5 >= 5.15.9
+- PyQt5-Qt5 >= 5.15.2
+- PyQt5-sip >= 12.11.0
+- py2app == 0.28.6 (for building)
+- setuptools >= 65.5.1
+- wheel >= 0.38.4
 
 ## Running the Application
 
@@ -36,6 +76,30 @@ python3 ustwo_tools.py
 ```
 
 Then open the generated application in the `dist` folder or copy it to your Applications folder.
+
+## Deployment
+
+### Distributing to Colleagues
+The built application is self-contained and includes all Python dependencies. To distribute:
+
+1. Build the application:
+   ```
+   ./build_app.sh
+   ```
+
+2. Copy the resulting `ustwo IT Tools.app` from the `dist` directory to the target machine.
+
+3. Ensure the prerequisites are in place on the target machine:
+   - GAM installed at `~/bin/gam7/gam`
+   - Proper Google API access for the user's account
+   - JAMF branding icon if using UI with branding
+
+4. The application can be placed in the `/Applications` folder or run from any location.
+
+### Notes for IT Administrators
+- The app saves configuration in the user's home directory at `~/.shared_drive_tool.json`
+- Each module maintains its own state and configuration
+- For users with Intel Macs, the app would need to be rebuilt with the `--universal2` flag in PyInstaller
 
 ## Project Structure
 
@@ -70,17 +134,14 @@ The build process creates a standalone macOS application that can be distributed
 
 3. The app will be created in the `dist` directory.
 
-## Requirements
-
-See `requirements.txt` for a list of required Python packages.
-
-## Notes
-
-- The application uses PyQt5 for its interface.
-- The macOS app is built using py2app.
-- The app package includes all dependencies and resources needed to run.
-
 ## Troubleshooting
+
+### SSH/GitHub Configuration
+If you're developing this application, ensure proper SSH configuration for syncing with:
+- Gitea repository
+- GitHub repositories (personal and company)
+
+The repository supports multiple remote configurations for flexible development workflows.
 
 ### ModuleNotFoundError: No module named 'json'
 
